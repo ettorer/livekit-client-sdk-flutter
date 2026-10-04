@@ -8,6 +8,8 @@ class LKTextField extends StatelessWidget {
   final IconData? icon;
   final bool obscureText;
   final TextInputType? keyboardType;
+  final int minLines;
+  final int maxLines;
 
   const LKTextField({
     required this.label,
@@ -15,6 +17,8 @@ class LKTextField extends StatelessWidget {
     this.icon,
     this.obscureText = false,
     this.keyboardType,
+    this.minLines = 1,
+    this.maxLines = 1,
     super.key,
   });
 
@@ -37,6 +41,8 @@ class LKTextField extends StatelessWidget {
             controller: ctrl,
             obscureText: obscureText,
             keyboardType: keyboardType,
+            minLines: minLines,
+            maxLines: maxLines,
             autocorrect: false,
             style: const TextStyle(fontSize: 15, color: LKColors.fgDark),
             cursorColor: LKColors.fgDark,

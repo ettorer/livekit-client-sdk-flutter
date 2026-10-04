@@ -6,7 +6,10 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'package:livekit_example/pages/connection_check.dart';
 import 'package:livekit_example/pages/prejoin.dart';
+import 'package:livekit_example/pages/vdi_room.dart';
 import 'package:livekit_example/theme.dart';
+import 'package:livekit_example/vdi/media_engine_controller.dart';
+import 'package:livekit_example/vdi/vdi_session.dart';
 import 'package:livekit_example/widgets/text_field.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -18,7 +21,9 @@ enum _ConnectOption { autoSubscribe, e2ee }
 enum _RoomOption { simulcast, adaptiveStream, dynacast, multiCodec }
 
 class ConnectPage extends StatefulWidget {
-  const ConnectPage({super.key});
+  const ConnectPage({super.key, this.vdiMode = false});
+
+  final bool vdiMode;
 
   @override
   State<StatefulWidget> createState() => _ConnectPageState();
@@ -27,6 +32,8 @@ class ConnectPage extends StatefulWidget {
 class _ConnectPageState extends State<ConnectPage> {
   static const _storeKeyUri = 'uri';
   static const _storeKeyToken = 'token';
+  static const _storeKeyMediaEngine = 'media-engine-url';
+  static const _defaultMediaEngineUrl = 'ws://127.0.0.1:8765';
   static const _storeKeySimulcast = 'simulcast';
   static const _storeKeyAdaptiveStream = 'adaptive-stream';
   static const _storeKeyDynacast = 'dynacast';
@@ -41,6 +48,7 @@ class _ConnectPageState extends State<ConnectPage> {
   final _uriCtrl = TextEditingController();
   final _tokenCtrl = TextEditingController();
   final _sharedKeyCtrl = TextEditingController();
+  final _mediaEngineCtrl = TextEditingController(text: _ConnectPageState._defaultMediaEngineUrl);
 
   bool _simulcast = true;
   bool _adaptiveStream = true;
@@ -56,7 +64,7 @@ class _ConnectPageState extends State<ConnectPage> {
   void initState() {
     super.initState();
     unawaited(_readPrefs());
-    if (lkPlatformIs(PlatformType.android)) {
+    if (!widget.vdiMode && lkPlatformIs(PlatformType.android)) {
       unawaited(_checkPermissions());
     }
   }
@@ -66,6 +74,7 @@ class _ConnectPageState extends State<ConnectPage> {
     _uriCtrl.dispose();
     _tokenCtrl.dispose();
     _sharedKeyCtrl.dispose();
+    _mediaEngineCtrl.dispose();
     super.dispose();
   }
 
@@ -103,6 +112,10 @@ class _ConnectPageState extends State<ConnectPage> {
     _sharedKeyCtrl.text = const bool.hasEnvironment('E2EEKEY')
         ? const String.fromEnvironment('E2EEKEY')
         : prefs.getString(_storeKeySharedKey) ?? '';
+    final savedMediaEngine = prefs.getString(_storeKeyMediaEngine);
+    if (savedMediaEngine != null && savedMediaEngine.isNotEmpty) {
+      _mediaEngineCtrl.text = savedMediaEngine;
+    }
 
     if (!mounted) return;
     setState(() {
@@ -122,6 +135,7 @@ class _ConnectPageState extends State<ConnectPage> {
     await prefs.setString(_storeKeyUri, _uriCtrl.text);
     await prefs.setString(_storeKeyToken, _tokenCtrl.text);
     await prefs.setString(_storeKeySharedKey, _sharedKeyCtrl.text);
+    await prefs.setString(_storeKeyMediaEngine, _mediaEngineCtrl.text);
     await prefs.setBool(_storeKeySimulcast, _simulcast);
     await prefs.setBool(_storeKeyAdaptiveStream, _adaptiveStream);
     await prefs.setBool(_storeKeyDynacast, _dynacast);
@@ -147,6 +161,12 @@ class _ConnectPageState extends State<ConnectPage> {
 
       await _writePrefs();
       await _saveCurrentConnectionToHistory();
+
+      if (widget.vdiMode) {
+        if (!ctx.mounted) return;
+        await _connectVdi(ctx);
+        return;
+      }
 
       final url = _uriCtrl.text.trim();
       final token = _tokenCtrl.text.trim();
@@ -181,6 +201,39 @@ class _ConnectPageState extends State<ConnectPage> {
           _busy = false;
         });
       }
+    }
+  }
+
+  Future<void> _connectVdi(BuildContext ctx) async {
+    final mediaEngineUrl = _mediaEngineCtrl.text.trim();
+    final url = _uriCtrl.text.trim();
+    final token = _tokenCtrl.text.trim();
+    final mediaUri = Uri.tryParse(mediaEngineUrl);
+    if (mediaUri == null || (mediaUri.scheme != 'ws' && mediaUri.scheme != 'wss') || mediaUri.host.isEmpty) {
+      throw Exception('Media engine URL must look like ws://192.168.1.242:8765');
+    }
+    if (url.isEmpty || token.isEmpty) {
+      throw Exception('Server URL and token are required');
+    }
+
+    final controller = MediaEngineController();
+    try {
+      await controller.open(mediaEngineUrl);
+      VdiSession.instance.attach(controller, mediaEngineUrl);
+      await controller.ensureRoom(url: url, token: token);
+      if (!ctx.mounted) {
+        await controller.shutdown();
+        VdiSession.instance.detach(controller);
+        return;
+      }
+      await Navigator.push<void>(
+        ctx,
+        MaterialPageRoute(builder: (_) => VdiRoomPage(controller: controller)),
+      );
+    } catch (error) {
+      await controller.shutdown();
+      VdiSession.instance.detach(controller);
+      rethrow;
     }
   }
 
@@ -295,7 +348,7 @@ class _ConnectPageState extends State<ConnectPage> {
                         ? Row(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
-                              const Expanded(child: _ConnectIntro()),
+                              Expanded(child: _ConnectIntro(vdiMode: widget.vdiMode)),
                               const SizedBox(width: 56),
                               SizedBox(
                                 width: 430,
@@ -306,7 +359,7 @@ class _ConnectPageState extends State<ConnectPage> {
                         : Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              const _ConnectIntro(),
+                              _ConnectIntro(vdiMode: widget.vdiMode),
                               const SizedBox(height: 32),
                               _buildConnectSurface(context),
                             ],
@@ -337,6 +390,20 @@ class _ConnectPageState extends State<ConnectPage> {
               ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 24),
+            if (widget.vdiMode) ...[
+              LKTextField(
+                label: 'Media Engine URL',
+                ctrl: _mediaEngineCtrl,
+                icon: Icons.dns_outlined,
+                keyboardType: TextInputType.url,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'WebSocket address of the C++ media engine',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: LKColors.textSecondary),
+              ),
+              const SizedBox(height: 18),
+            ],
             LKTextField(
               label: 'Server URL',
               ctrl: _uriCtrl,
@@ -348,34 +415,40 @@ class _ConnectPageState extends State<ConnectPage> {
               label: 'Token',
               ctrl: _tokenCtrl,
               icon: Icons.key,
-              obscureText: true,
+              obscureText: !widget.vdiMode,
+              minLines: widget.vdiMode ? 3 : 1,
+              maxLines: widget.vdiMode ? 6 : 1,
             ),
-            const SizedBox(height: 18),
-            LKTextField(
-              label: 'E2EE Key',
-              ctrl: _sharedKeyCtrl,
-              icon: Icons.lock,
-              obscureText: true,
-            ),
+            if (!widget.vdiMode) ...[
+              const SizedBox(height: 18),
+              LKTextField(
+                label: 'E2EE Key',
+                ctrl: _sharedKeyCtrl,
+                icon: Icons.lock,
+                obscureText: true,
+              ),
+            ],
             const SizedBox(height: 20),
             Wrap(
               spacing: 10,
               runSpacing: 10,
               children: [
-                _ConnectOptionsMenu(
-                  autoSubscribe: _autoSubscribe,
-                  e2ee: _e2ee,
-                  onSelected: _handleConnectOption,
-                ),
-                _RoomOptionsMenu(
-                  simulcast: _simulcast,
-                  adaptiveStream: _adaptiveStream,
-                  dynacast: _dynacast,
-                  multiCodec: _multiCodec,
-                  preferredCodec: _preferredCodec,
-                  codecOptions: _codecOptions,
-                  onSelected: _handleRoomOption,
-                ),
+                if (!widget.vdiMode)
+                  _ConnectOptionsMenu(
+                    autoSubscribe: _autoSubscribe,
+                    e2ee: _e2ee,
+                    onSelected: _handleConnectOption,
+                  ),
+                if (!widget.vdiMode)
+                  _RoomOptionsMenu(
+                    simulcast: _simulcast,
+                    adaptiveStream: _adaptiveStream,
+                    dynacast: _dynacast,
+                    multiCodec: _multiCodec,
+                    preferredCodec: _preferredCodec,
+                    codecOptions: _codecOptions,
+                    onSelected: _handleRoomOption,
+                  ),
                 if (_history.isNotEmpty)
                   _RecentConnectionsMenu(
                     history: _history,
@@ -402,18 +475,22 @@ class _ConnectPageState extends State<ConnectPage> {
                   : const Icon(Icons.bolt),
               label: Text(_busy ? 'CONNECTING' : 'CONNECT'),
             ),
-            const SizedBox(height: 8),
-            TextButton(
-              onPressed: _busy ? null : () => unawaited(_connectionCheck(context)),
-              child: const Text('Connection Check'),
-            ),
+            if (!widget.vdiMode) ...[
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: _busy ? null : () => unawaited(_connectionCheck(context)),
+                child: const Text('Connection Check'),
+              ),
+            ],
           ],
         ),
       );
 }
 
 class _ConnectIntro extends StatelessWidget {
-  const _ConnectIntro();
+  const _ConnectIntro({this.vdiMode = false});
+
+  final bool vdiMode;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -436,6 +513,13 @@ class _ConnectIntro extends StatelessWidget {
               context,
             ).textTheme.titleMedium?.copyWith(color: LKColors.textSecondary),
           ),
+          if (vdiMode) ...[
+            const SizedBox(height: 12),
+            Text(
+              'Remote desktop mode. Video and audio run on the media engine.',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(color: LKColors.lkGreen),
+            ),
+          ],
         ],
       );
 }
