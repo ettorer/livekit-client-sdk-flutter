@@ -5,6 +5,7 @@ import 'package:logging/logging.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'json_rpc.dart';
+import 'media_devices.dart';
 import 'media_engine_state.dart';
 import 'visible_region.dart';
 
@@ -75,6 +76,34 @@ class MediaEngineClient {
   }
 
   Future<void> disconnect() => _callMap('disconnect');
+
+  Future<MediaDeviceSnapshot> getMedia() async {
+    return MediaDeviceSnapshot.fromJson(await _callMap('get_media'));
+  }
+
+  /// Sends only the ids that are present. At least one is required.
+  Future<MediaDeviceSnapshot> setMedia({String? camera, String? audioInput, String? audioOutput}) async {
+    final params = <String, dynamic>{
+      if (camera != null && camera.isNotEmpty) 'camera': camera,
+      if (audioInput != null && audioInput.isNotEmpty) 'audio_input': audioInput,
+      if (audioOutput != null && audioOutput.isNotEmpty) 'audio_output': audioOutput,
+    };
+    if (params.isEmpty) {
+      throw ArgumentError('set_media needs a camera, audio_input, or audio_output id');
+    }
+    return MediaDeviceSnapshot.fromJson(await _callMap('set_media', params));
+  }
+
+  /// Opens [camera] in the local preview window. Does not publish it.
+  ///
+  /// The engine must create `window_id` `"local"` before it returns, so the
+  /// next `set_geometry` can place that window.
+  Future<void> startPreview({required String camera}) {
+    return _callMap('start_preview', {'camera': camera});
+  }
+
+  /// Closes the preview opened by [startPreview]. No params.
+  Future<void> stopPreview() => _callMap('stop_preview');
 
   Future<void> startVideo() => _callMap('start_video');
 

@@ -15,10 +15,16 @@ import '../vdi/visible_region.dart';
 import '../widgets/messages_panel.dart';
 import '../widgets/vdi_controls.dart';
 
+const _vdiGridGap = 8.0;
+const _vdiGridPadding = 8.0;
+const _vdiStripWidth = 240.0;
+const _vdiVideoAspect = 16 / 9;
+
 /// Room screen for `--vdi`.
 ///
-/// Tiles are placeholders. The media engine draws the real video in its own
-/// windows, and this page keeps those windows aligned with each tile.
+/// Tiles are placeholders. Each video hole is 16:9 and the grid starts at the
+/// top-left. The media engine draws the real video in its own windows, and
+/// this page keeps those windows aligned with each hole.
 class VdiRoomPage extends StatefulWidget {
   const VdiRoomPage({required this.controller, super.key});
 
@@ -321,14 +327,7 @@ class _VdiRoomPageState extends State<VdiRoomPage> {
   Widget _buildBody(LiveKitStatus status, List<VideoWindowInfo> windows) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final stage = LayoutBuilder(
-          builder: (context, stageConstraints) {
-            if (windows.isEmpty) {
-              return _EmptyStage(status: status, link: _controller.link);
-            }
-            return _buildStage(windows, stageConstraints);
-          },
-        );
+        final stage = windows.isEmpty ? _EmptyStage(status: status, link: _controller.link) : _buildStage(windows);
         if (!_showMessagesPanel) return stage;
 
         final messages = MessagesPanel(
@@ -368,44 +367,63 @@ class _VdiRoomPageState extends State<VdiRoomPage> {
     );
   }
 
-  Widget _buildStage(List<VideoWindowInfo> windows, BoxConstraints constraints) {
-    final focused = _focusedWindow(windows);
-    if (focused == null) {
-      return _tileGrid(windows, constraints);
-    }
-
-    final others = windows.where((window) => window.windowId != focused.windowId).toList();
-    final wide = constraints.maxWidth >= constraints.maxHeight;
-    final primary = _tile(focused, large: true);
-    if (others.isEmpty) {
-      return Padding(padding: const EdgeInsets.all(8), child: primary);
-    }
-
-    final stripChildren = <Widget>[
-      for (var index = 0; index < others.length; index++) ...[
-        if (index > 0) const SizedBox(width: 8, height: 8),
-        Expanded(child: _tile(others[index])),
-      ],
-    ];
-    final strip = wide ? Column(children: stripChildren) : Row(children: stripChildren);
-
+  Widget _buildStage(List<VideoWindowInfo> windows) {
     return Padding(
-      padding: const EdgeInsets.all(8),
-      child: wide
-          ? Row(
+      padding: const EdgeInsets.all(_vdiGridPadding),
+      child: LayoutBuilder(
+        builder: (context, inner) {
+          final focused = _focusedWindow(windows);
+          if (focused == null) {
+            return Align(
+              alignment: Alignment.topLeft,
+              child: _tileGrid(windows, inner.maxWidth, inner.maxHeight),
+            );
+          }
+
+          final others = windows.where((window) => window.windowId != focused.windowId).toList();
+          final wide = others.isNotEmpty && inner.maxWidth >= _vdiStripWidth + _vdiGridGap + 320;
+          if (!wide) {
+            final roomForOthers = inner.maxHeight - _vdiGridGap - 96;
+            final othersLimit = roomForOthers < 0 ? 0.0 : roomForOthers;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Expanded(child: primary),
-                const SizedBox(width: 8),
-                SizedBox(width: 240, child: strip),
+                Expanded(child: _tile(focused, large: true, expand: true)),
+                if (others.isNotEmpty && othersLimit > 0) ...[
+                  const SizedBox(height: _vdiGridGap),
+                  _tileGrid(others, inner.maxWidth, othersLimit),
+                ],
               ],
-            )
-          : Column(
-              children: [
-                Expanded(flex: 3, child: primary),
-                const SizedBox(height: 8),
-                SizedBox(height: 140, child: strip),
-              ],
-            ),
+            );
+          }
+
+          final stripWidth = _fitColumnWidth(
+            count: others.length,
+            maxWidth: _vdiStripWidth,
+            maxHeight: inner.maxHeight,
+          );
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: _tile(focused, large: true, expand: true)),
+              const SizedBox(width: _vdiGridGap),
+              SizedBox(
+                width: _vdiStripWidth,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (var index = 0; index < others.length; index++) ...[
+                      if (index > 0) const SizedBox(height: _vdiGridGap),
+                      SizedBox(width: stripWidth, child: _tile(others[index])),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 
@@ -418,50 +436,90 @@ class _VdiRoomPageState extends State<VdiRoomPage> {
     return null;
   }
 
-  Widget _tileGrid(List<VideoWindowInfo> windows, BoxConstraints constraints) {
-    final columns = _columnCount(windows.length, constraints.maxWidth);
+  /// Width of one unselected 16:9 tile so [count] of them, stacked, fit in [maxHeight].
+  double _fitColumnWidth({required int count, required double maxWidth, required double maxHeight}) {
+    if (count <= 0 || maxWidth <= 0) return 0;
+    if (!maxHeight.isFinite || maxHeight <= 0) return maxWidth;
+    final natural = _gridHeight(count, 1, maxWidth);
+    if (natural <= maxHeight) return maxWidth;
+    final each = (maxHeight - _vdiGridGap * (count - 1)) / count;
+    final fitted = _tileWidthForHeight(each);
+    return fitted > maxWidth ? maxWidth : fitted;
+  }
+
+  double _gridHeight(int count, int columns, double tileWidth) {
+    if (count <= 0 || columns <= 0) return 0;
+    final rows = (count / columns).ceil();
+    return rows * _tileHeightForWidth(tileWidth) + (rows - 1) * _vdiGridGap;
+  }
+
+  /// Unselected tile: 1 px border, 32 px name bar, 16:9 hole.
+  double _tileHeightForWidth(double width) {
+    const border = 1.0;
+    const label = 32.0;
+    final inner = width - border * 2;
+    if (inner <= 0) return border * 2 + label;
+    return border * 2 + inner / _vdiVideoAspect + label;
+  }
+
+  double _tileWidthForHeight(double height) {
+    const border = 1.0;
+    const label = 32.0;
+    final video = height - border * 2 - label;
+    if (video <= 0) return 0;
+    return (video * _vdiVideoAspect + border * 2).floorToDouble();
+  }
+
+  /// Tiles share the row width, stay 16:9, and a short last row stays on the left.
+  ///
+  /// [maxHeight] caps the grid so a short stage shrinks the tiles instead of
+  /// letting the native video windows cover the control bar.
+  Widget _tileGrid(List<VideoWindowInfo> windows, double width, double maxHeight) {
+    if (windows.isEmpty || width <= 0) return const SizedBox.shrink();
+    final columns = _columnCount(windows.length, width);
     final rows = (windows.length / columns).ceil();
-    return Padding(
-      padding: const EdgeInsets.all(8),
-      child: Column(
-        children: [
-          for (var row = 0; row < rows; row++) ...[
-            if (row > 0) const SizedBox(height: 8),
-            Expanded(
-              child: Row(
-                children: [
-                  for (var column = 0; column < columns; column++) ...[
-                    if (column > 0) const SizedBox(width: 8),
-                    Expanded(child: _tileAt(windows, row * columns + column)),
-                  ],
+    var tileWidth = ((width - _vdiGridGap * (columns - 1)) / columns).floorToDouble();
+    if (maxHeight.isFinite && maxHeight > 0 && _gridHeight(windows.length, columns, tileWidth) > maxHeight) {
+      final each = (maxHeight - _vdiGridGap * (rows - 1)) / rows;
+      final fitted = _tileWidthForHeight(each);
+      if (fitted < tileWidth) tileWidth = fitted;
+    }
+    if (tileWidth <= 0) return const SizedBox.shrink();
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var row = 0; row < rows; row++) ...[
+          if (row > 0) const SizedBox(height: _vdiGridGap),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var column = 0; column < columns; column++)
+                if (row * columns + column < windows.length) ...[
+                  if (column > 0) const SizedBox(width: _vdiGridGap),
+                  SizedBox(width: tileWidth, child: _tile(windows[row * columns + column])),
                 ],
-              ),
-            ),
-          ],
+            ],
+          ),
         ],
-      ),
+      ],
     );
   }
 
   int _columnCount(int count, double width) {
-    if (count <= 1) return 1;
-    if (count == 2) return width >= 700 ? 2 : 1;
-    if (count <= 4) return width >= 700 ? 2 : 1;
-    if (count <= 9) return width >= 900 ? 3 : 2;
-    return width >= 1100 ? 4 : 3;
+    if (count <= 1 || width < 560) return 1;
+    final byWidth = width < 920 ? 2 : (width < 1280 ? 3 : 4);
+    return count < byWidth ? count : byWidth;
   }
 
-  Widget _tileAt(List<VideoWindowInfo> windows, int index) {
-    if (index >= windows.length) return const SizedBox.expand();
-    return _tile(windows[index]);
-  }
-
-  Widget _tile(VideoWindowInfo window, {bool large = false}) {
+  Widget _tile(VideoWindowInfo window, {bool large = false, bool expand = false}) {
     final holeKey = _tileKeys.putIfAbsent(window.windowId, GlobalKey.new);
     return _VdiVideoTile(
       window: window,
       holeKey: holeKey,
       large: large,
+      expand: expand,
       audioEnabled: window.isLocal && _controller.status.audio,
       selected: _focusedId == window.windowId,
       onTap: () {
@@ -654,6 +712,7 @@ class _VdiVideoTile extends StatelessWidget {
     required this.selected,
     required this.onTap,
     this.large = false,
+    this.expand = false,
   });
 
   final VideoWindowInfo window;
@@ -661,72 +720,80 @@ class _VdiVideoTile extends StatelessWidget {
   final bool audioEnabled;
   final bool selected;
   final bool large;
+  final bool expand;
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) => DecoratedBox(
-        decoration: BoxDecoration(
-          color: LKColors.cardDark,
-          border: Border.all(
-            color: selected ? LKColors.lkBlue : LKColors.border,
-            width: selected ? 2 : 1,
-          ),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(7),
-          child: Column(
-            children: [
-              Expanded(
-                child: Padding(
-                  // Keep the native video inside the tile stroke. The GTK
-                  // window sits above Flutter, so it would cover a border
-                  // drawn on the same pixels.
-                  padding: EdgeInsets.all(selected ? 2 : 1),
-                  child: GestureDetector(
-                    onTap: onTap,
-                    child: ColoredBox(
-                      key: holeKey,
-                      color: Colors.black,
-                      child: const Center(
-                        child: Icon(Icons.videocam_outlined, color: Colors.white24, size: 36),
-                      ),
+  Widget build(BuildContext context) {
+    final borderWidth = selected ? 2.0 : 1.0;
+    final borderColor = selected ? LKColors.lkBlue : LKColors.border;
+    return Container(
+      decoration: BoxDecoration(
+        color: LKColors.cardDark,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      // Paint the stroke after the name bar. A background border shows
+      // through that bar's translucent black and the bottom edge changes color.
+      foregroundDecoration: BoxDecoration(
+        border: Border.all(color: borderColor, width: borderWidth),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      // Keep the native video inside the tile stroke. The engine window sits
+      // above Flutter, so it would cover a border drawn on the same pixels.
+      // Grid holes stay 16:9. A focused hole fills the stage rectangle.
+      padding: EdgeInsets.all(borderWidth),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8 - borderWidth),
+        child: Column(
+          mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
+          children: [
+            if (expand) Expanded(child: _hole()) else AspectRatio(aspectRatio: _vdiVideoAspect, child: _hole()),
+            Container(
+              height: large ? 36 : 32,
+              color: Colors.black.withValues(alpha: 0.45),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      window.label,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ),
-                ),
-              ),
-              Container(
-                height: large ? 36 : 32,
-                color: Colors.black.withValues(alpha: 0.45),
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        window.label,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
+                  if (window.isLocal)
+                    Icon(
+                      audioEnabled ? Icons.mic : Icons.mic_off,
+                      size: 16,
+                      color: audioEnabled ? Colors.white : Colors.redAccent,
                     ),
-                    if (window.isLocal)
-                      Icon(
-                        audioEnabled ? Icons.mic : Icons.mic_off,
-                        size: 16,
-                        color: audioEnabled ? Colors.white : Colors.redAccent,
-                      ),
-                    IconButton(
-                      onPressed: onTap,
-                      icon: Icon(selected ? Icons.fullscreen_exit : Icons.fullscreen, size: 18),
-                      tooltip: selected ? 'Exit focus' : 'Focus',
-                      visualDensity: VisualDensity.compact,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                    ),
-                  ],
-                ),
+                  IconButton(
+                    onPressed: onTap,
+                    icon: Icon(selected ? Icons.fullscreen_exit : Icons.fullscreen, size: 18),
+                    tooltip: selected ? 'Exit focus' : 'Focus',
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
-      );
+      ),
+    );
+  }
+
+  Widget _hole() {
+    return GestureDetector(
+      onTap: onTap,
+      child: ColoredBox(
+        key: holeKey,
+        color: Colors.black,
+        child: const Center(
+          child: Icon(Icons.videocam_outlined, color: Colors.white24, size: 36),
+        ),
+      ),
+    );
+  }
 }

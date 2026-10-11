@@ -180,7 +180,23 @@ No params. Leave the room, then push `disconnected`. `-32000` when already disco
 
 ### `start_video` / `stop_video` / `start_audio` / `stop_audio`
 
-No params. Publish or unpublish the engine's local camera or microphone, then push `media_state`.
+No params. Publish or unpublish the engine's local camera or microphone, then push `media_state`. `start_video` and `start_audio` open the devices last stored by `set_media`.
+
+### `get_media` / `set_media`
+
+Device lists and the camera, microphone, and speaker selection. No room is required. The full shapes, including `selected` and `default`, are in [rpc_media_devices.md](rpc_media_devices.md).
+
+`get_media` takes no params. `set_media` takes any subset of `camera`, `audio_input`, and `audio_output`. Each value is an `id` from `get_media`. At least one field is required. Omitted fields stay as they are.
+
+### `start_preview` / `stop_preview`
+
+Local camera preview before the room. These do not publish.
+
+`start_preview` params are `{"camera": "<id>"}`. The id is from `get_media.cameras`. Create or reuse the local preview window and push `window_created` with that window's fields (`window_id`, `type: "local"`, and the rest of the `get_video_list` object). Push it when the window is new, before or as the call returns. Result: `{"ok": true, "window_id": "local"}`. Flutter does not place the preview until that `window_created` arrives. It then sends `set_geometry` for the event's `window_id`, sized to the preview hole. `window_destroyed` stops those updates.
+
+`stop_preview` takes no params. Close that preview. If video is not published, destroy the local window and push `window_destroyed`. If no preview is running, return `{"ok": true}`.
+
+The device page calls `get_media`, then `start_preview` with `default.camera`. A camera change is `stop_preview`, then `set_media` with the new id, then `start_preview` with that id. Joining the room calls `stop_preview` before `connect`.
 
 ### `publish_data`
 

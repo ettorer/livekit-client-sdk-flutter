@@ -21,7 +21,7 @@ void main() {
     expect(find.text('Media Engine URL'), findsNothing);
   });
 
-  testWidgets('vdi mode asks for the media engine and skips device options', (tester) async {
+  testWidgets('vdi mode asks for the media engine', (tester) async {
     SharedPreferences.setMockInitialValues({});
 
     await tester.pumpWidget(const LiveKitExampleApp(vdiMode: true));

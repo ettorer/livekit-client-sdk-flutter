@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:logging/logging.dart';
 
 import 'json_rpc.dart';
+import 'media_devices.dart';
 import 'media_engine_client.dart';
 import 'media_engine_state.dart';
 import 'visible_region.dart';
@@ -142,11 +143,27 @@ class MediaEngineController extends ChangeNotifier {
   Future<void> stopAudio() => _guard(() => _client!.stopAudio());
 
   Future<void> publishData({required String topic, required String data}) async {
+    await _requireClient().publishData(topic: topic, data: data);
+  }
+
+  Future<MediaDeviceSnapshot> getMedia() => _requireClient().getMedia();
+
+  Future<MediaDeviceSnapshot> setMedia({String? camera, String? audioInput, String? audioOutput}) {
+    return _requireClient().setMedia(camera: camera, audioInput: audioInput, audioOutput: audioOutput);
+  }
+
+  Future<void> startPreview({required String camera}) {
+    return _requireClient().startPreview(camera: camera);
+  }
+
+  Future<void> stopPreview() => _requireClient().stopPreview();
+
+  MediaEngineClient _requireClient() {
     final client = _client;
     if (client == null || _shutDown) {
       throw StateError('Media engine is not connected');
     }
-    await client.publishData(topic: topic, data: data);
+    return client;
   }
 
   void clearError() {

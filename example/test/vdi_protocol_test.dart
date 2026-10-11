@@ -4,6 +4,7 @@ import 'dart:ui';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:livekit_example/vdi/chat.dart';
 import 'package:livekit_example/vdi/json_rpc.dart';
+import 'package:livekit_example/vdi/media_devices.dart';
 import 'package:livekit_example/vdi/media_engine_controller.dart';
 import 'package:livekit_example/vdi/media_engine_state.dart';
 import 'package:livekit_example/vdi/vdi_session.dart';
@@ -262,5 +263,67 @@ void main() {
     final store = VideoWindowStore()..remove('remote:bob');
     expect(store.windows, isEmpty);
     expect(store.remove('remote:bob'), isFalse);
+  });
+
+  test('parses get_media and badges the default id', () {
+    final devices = MediaDeviceSnapshot.fromJson({
+      'cameras': [
+        {'id': '/dev/video0', 'name': 'Integrated Camera'},
+      ],
+      'audio_inputs': [
+        {'id': 'default: Built-in Microphone', 'name': 'default: Built-in Microphone', 'index': 0},
+        {'id': 'Built-in Microphone', 'name': 'Built-in Microphone', 'index': 1},
+      ],
+      'audio_outputs': [
+        {'id': 'Built-in Speaker', 'name': 'Built-in Speaker', 'index': 1},
+      ],
+      'selected': {
+        'camera': '/dev/video0',
+        'audio_input': 'Built-in Microphone',
+        'audio_output': 'Built-in Speaker',
+      },
+      'default': {
+        'camera': '/dev/video0',
+        'audio_input': 'Built-in Microphone',
+        'audio_output': 'Built-in Speaker',
+      },
+      'audio_error': '',
+    });
+
+    expect(devices.cameras.single.id, '/dev/video0');
+    expect(devices.audioInputs, hasLength(2));
+    expect(devices.audioInputs.first.index, 0);
+    expect(devices.defaults.camera, '/dev/video0');
+    expect(devices.cameras.single.label(defaultId: devices.defaults.camera), 'Integrated Camera (default)');
+    expect(
+      listedDeviceId(devices.audioInputs, devices.selected.audioInput, devices.defaults.audioInput),
+      'Built-in Microphone',
+    );
+    expect(listedDeviceId(const [], '', ''), isNull);
+  });
+
+  test('set_media result keeps the device lists', () {
+    const lists = MediaDeviceSnapshot(
+      cameras: [EngineMediaDevice(id: '/dev/video0', name: 'Integrated Camera')],
+      selected: MediaDeviceChoice(camera: '/dev/video0'),
+      defaults: MediaDeviceChoice(camera: '/dev/video0'),
+    );
+    final update = MediaDeviceSnapshot.fromJson({
+      'ok': true,
+      'selected': {
+        'camera': '/dev/video2',
+        'audio_input': 'Built-in Microphone',
+        'audio_output': 'Built-in Speaker',
+      },
+      'default': {
+        'camera': '/dev/video0',
+        'audio_input': 'Built-in Microphone',
+        'audio_output': 'Built-in Speaker',
+      },
+    });
+    final merged = lists.applying(update);
+    expect(merged.cameras.single.id, '/dev/video0');
+    expect(merged.selected.camera, '/dev/video2');
+    expect(merged.defaults.audioOutput, 'Built-in Speaker');
   });
 }

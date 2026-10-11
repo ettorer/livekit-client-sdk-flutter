@@ -6,7 +6,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'package:livekit_example/pages/connection_check.dart';
 import 'package:livekit_example/pages/prejoin.dart';
-import 'package:livekit_example/pages/vdi_room.dart';
+import 'package:livekit_example/pages/vdi_devices.dart';
 import 'package:livekit_example/theme.dart';
 import 'package:livekit_example/vdi/media_engine_controller.dart';
 import 'package:livekit_example/vdi/vdi_session.dart';
@@ -220,7 +220,6 @@ class _ConnectPageState extends State<ConnectPage> {
     try {
       await controller.open(mediaEngineUrl);
       VdiSession.instance.attach(controller, mediaEngineUrl);
-      await controller.ensureRoom(url: url, token: token);
       if (!ctx.mounted) {
         await controller.shutdown();
         VdiSession.instance.detach(controller);
@@ -228,7 +227,9 @@ class _ConnectPageState extends State<ConnectPage> {
       }
       await Navigator.push<void>(
         ctx,
-        MaterialPageRoute(builder: (_) => VdiRoomPage(controller: controller)),
+        MaterialPageRoute(
+          builder: (_) => VdiDevicesPage(controller: controller, url: url, token: token),
+        ),
       );
     } catch (error) {
       await controller.shutdown();

@@ -17,9 +17,9 @@ Default media-engine address: `ws://127.0.0.1:8765`.
 
 ## Behavior already implemented
 
-- Connect page in VDI mode asks for the LiveKit URL, token, and media-engine WebSocket. Device pickers on the second page are skipped.
+- Connect page in VDI mode asks for the LiveKit URL, token, and media-engine WebSocket, then opens a device page. That page calls `get_media` and `start_preview` on the platform default camera. It places the preview only after `window_created`, with `set_geometry` for that window id over the preview hole. `window_destroyed` stops the updates. Microphone and speaker changes call `set_media`. Changing the camera calls `stop_preview`, then `set_media`, then `start_preview` for the new camera. Join sends the selection, stops the preview, and enters the room.
 - Once the engine reports it is in the room, Flutter calls `start_video` and `start_audio` automatically. There is no publish dialog.
-- Video tiles in Flutter are placeholders. The engine draws undecorated windows on top of those tiles. Flutter polls tile geometry about every 100 ms and sends `set_geometry`.
+- Video tiles in Flutter are placeholders. Grid holes are 16:9, start at the top-left, and do not stretch to fill leftover space; a short last row stays on the left. A short window shrinks those tiles, still at 16:9, so the holes stay above the control bar. A focused tile fills the stage beside the side strip, down to the control bar, and is not forced to 16:9. The engine draws undecorated windows on top of those holes. Flutter polls tile geometry about every 100 ms and sends `set_geometry` for the hole, so the engine window matches that rectangle.
 - Each `set_geometry` includes `regions`: the pieces of that tile actually showing on this desktop, relative to the tile. Windows reads them from the `vdi_visible_region` plugin about every 300 ms (one Z-order walk for every tile, skipped while a query is in flight). Linux sends one rectangle covering the whole tile.
 - Each tile keeps a 1 px inset (2 px when selected) so the engine window does not cover the Flutter border.
 - Chat uses the same topic as the stock example, `lk-example-chat`, via `publish_data`.
@@ -60,16 +60,19 @@ Dart side: `example/lib/vdi/view_origin.dart`, `example/lib/vdi/visible_region.d
 | --- | --- |
 | `example/lib/main.dart` | `--vdi` flag. Skips `LiveKitClient.initialize`. Wraps the app in `VdiExitScope`. |
 | `example/lib/pages/connect.dart` | Connect form and engine handshake. |
+| `example/lib/pages/vdi_devices.dart` | Camera, microphone, and speaker picker. Places the preview after `window_created`. |
 | `example/lib/pages/vdi_room.dart` | Room UI, tiles, chat, geometry polling, auto publish. |
 | `example/lib/vdi/json_rpc.dart` | JSON-RPC 2.0 peer. |
 | `example/lib/vdi/media_engine_client.dart` | WebSocket client and method wrappers. |
 | `example/lib/vdi/media_engine_controller.dart` | Room state, geometry queue, hide/show, quit. |
 | `example/lib/vdi/media_engine_state.dart` | `get_status` and window-list models. |
+| `example/lib/vdi/media_devices.dart` | `get_media` / `set_media` device lists and the selected ids. |
 | `example/lib/vdi/vdi_session.dart` | App lifecycle and quit-on-exit. |
 | `example/lib/vdi/chat.dart` | `data_received` / `chat` parsing. |
 | `example/lib/vdi/visible_region.dart` | Widget-relative `regions` and the last list sent per window. |
 | `example/vdi_visible_region` | Windows plugin. One Z-order walk, screen rectangles back to Dart. |
 | `example/JSON_RPC.md` | Wire contract for the C++ media engine. |
+| `example/rpc_media_devices.md` | `get_media`, `set_media`, and the preview calls. |
 | `example/test/vdi_protocol_test.dart` | Protocol and geometry unit tests. |
 
 # JSON-RPC
