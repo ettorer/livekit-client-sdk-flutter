@@ -26,6 +26,9 @@ dependencies:
   livekit_client:
     path: ../
 
+  vdi_visible_region:
+    path: vdi_visible_region
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

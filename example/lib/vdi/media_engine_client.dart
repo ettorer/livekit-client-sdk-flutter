@@ -6,6 +6,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'json_rpc.dart';
 import 'media_engine_state.dart';
+import 'visible_region.dart';
 
 final _log = Logger('VdiMediaEngine');
 
@@ -111,6 +112,7 @@ class MediaEngineClient {
     required int y,
     required int width,
     required int height,
+    required List<RegionRect> regions,
   }) {
     return _callMap('set_geometry', {
       'window_id': windowId,
@@ -118,6 +120,7 @@ class MediaEngineClient {
       'y': y,
       'width': width,
       'height': height,
+      'regions': [for (final region in regions) region.toJson()],
     });
   }
 

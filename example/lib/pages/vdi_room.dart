@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:vdi_visible_region/vdi_visible_region.dart';
 
 import '../exts.dart';
 import '../theme.dart';
@@ -10,6 +11,7 @@ import '../vdi/media_engine_controller.dart';
 import '../vdi/media_engine_state.dart';
 import '../vdi/vdi_session.dart';
 import '../vdi/view_origin.dart';
+import '../vdi/visible_region.dart';
 import '../widgets/messages_panel.dart';
 import '../widgets/vdi_controls.dart';
 
@@ -28,9 +30,12 @@ class VdiRoomPage extends StatefulWidget {
 
 class _VdiRoomPageState extends State<VdiRoomPage> {
   final _tileKeys = <String, GlobalKey>{};
+  final _regions = RegionCache();
   final _messageCtrl = TextEditingController();
   final List<ExampleRoomMessage> _messages = [];
   Timer? _geometryTimer;
+  Timer? _regionTimer;
+  var _regionQueryInFlight = false;
   String? _focusedId;
   var _leaving = false;
   var _seenConnected = false;
@@ -48,8 +53,12 @@ class _VdiRoomPageState extends State<VdiRoomPage> {
     _geometryTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
       unawaited(_reportGeometry());
     });
+    _regionTimer = Timer.periodic(visibleRegionInterval, (_) {
+      unawaited(_refreshVisibleRegions());
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      unawaited(_refreshVisibleRegions());
       unawaited(_reportGeometry());
       _maybeAskPublish();
     });
@@ -58,6 +67,7 @@ class _VdiRoomPageState extends State<VdiRoomPage> {
   @override
   void dispose() {
     _geometryTimer?.cancel();
+    _regionTimer?.cancel();
     _messageCtrl.dispose();
     _controller.onDataReceived = null;
     _controller.removeListener(_onChanged);
@@ -94,6 +104,7 @@ class _VdiRoomPageState extends State<VdiRoomPage> {
 
   void _retainKeys(Set<String> ids) {
     _tileKeys.removeWhere((id, _) => !ids.contains(id));
+    _regions.retain(ids);
     for (final id in ids) {
       _tileKeys.putIfAbsent(id, GlobalKey.new);
     }
@@ -114,6 +125,7 @@ class _VdiRoomPageState extends State<VdiRoomPage> {
     if (_leaving) return;
     _leaving = true;
     _geometryTimer?.cancel();
+    _regionTimer?.cancel();
     await _controller.shutdown();
     VdiSession.instance.detach(_controller);
     if (mounted) {
@@ -165,22 +177,97 @@ class _VdiRoomPageState extends State<VdiRoomPage> {
     final origin = await VdiViewLocator.getOrigin() ?? VdiViewOrigin.fallback;
     if (!mounted || _leaving || _controller.isQuitting) return;
     for (final entry in _tileKeys.entries) {
-      final tileContext = entry.value.currentContext;
-      if (tileContext == null || !tileContext.mounted) continue;
-      final box = tileContext.findRenderObject();
-      if (box is! RenderBox || !box.hasSize || !box.attached) continue;
-      final topLeft = box.localToGlobal(Offset.zero);
-      final size = box.size;
+      final sample = _sampleTile(entry.key, entry.value, origin);
+      if (sample == null) continue;
       _controller.reportGeometry(
         entry.key,
         TileRect(
-          x: origin.toScreenX(topLeft.dx),
-          y: origin.toScreenY(topLeft.dy),
-          width: origin.toScreenSize(size.width),
-          height: origin.toScreenSize(size.height),
+          x: sample.x,
+          y: sample.y,
+          width: sample.width,
+          height: sample.height,
+          // Same pixel unit as width and height. Windows values are already
+          // physical pixels, so the region edges are not divided by
+          // devicePixelRatio.
+          regions: _regions.forGeometry(entry.key, sample.width, sample.height),
         ),
       );
     }
+  }
+
+  Future<void> _refreshVisibleRegions() async {
+    if (_regionQueryInFlight || _leaving || _controller.isQuitting || !mounted) return;
+    if (VdiSession.instance.overlayHidden) return;
+    _regionQueryInFlight = true;
+    try {
+      final origin = await VdiViewLocator.getOrigin() ?? VdiViewOrigin.fallback;
+      if (!mounted || _leaving || _controller.isQuitting || VdiSession.instance.overlayHidden) return;
+      final samples = <_TileSample>[];
+      for (final entry in _tileKeys.entries) {
+        final sample = _sampleTile(entry.key, entry.value, origin);
+        if (sample != null) samples.add(sample);
+      }
+      if (samples.isEmpty) return;
+      final view = View.of(context);
+      final native = await VdiVisibleRegion.getVisibleRegions(
+        viewId: view.viewId,
+        devicePixelRatio: view.devicePixelRatio,
+        widgets: [
+          for (final sample in samples)
+            VisibleWidgetBounds(
+              left: sample.left,
+              top: sample.top,
+              right: sample.right,
+              bottom: sample.bottom,
+            ),
+        ],
+      );
+      if (!mounted || _leaving || _controller.isQuitting || native == null || native.length != samples.length) {
+        return;
+      }
+      for (var index = 0; index < samples.length; index++) {
+        final sample = samples[index];
+        final result = native[index];
+        final bounds = result.bounds;
+        _regions.put(
+          sample.id,
+          width: sample.width,
+          height: sample.height,
+          regions: bounds == null
+              ? const []
+              : regionsForWidget(
+                  widgetScreen: bounds,
+                  width: sample.width,
+                  height: sample.height,
+                  screenRects: result.rectangles,
+                ),
+        );
+      }
+    } finally {
+      _regionQueryInFlight = false;
+    }
+    if (mounted) unawaited(_reportGeometry());
+  }
+
+  _TileSample? _sampleTile(String id, GlobalKey key, VdiViewOrigin origin) {
+    final tileContext = key.currentContext;
+    if (tileContext == null || !tileContext.mounted) return null;
+    final box = tileContext.findRenderObject();
+    if (box is! RenderBox || !box.hasSize || !box.attached) return null;
+    final topLeft = box.localToGlobal(Offset.zero);
+    final bottomRight = box.localToGlobal(Offset(box.size.width, box.size.height));
+    final size = box.size;
+    return _TileSample(
+      id: id,
+      left: topLeft.dx,
+      top: topLeft.dy,
+      right: bottomRight.dx,
+      bottom: bottomRight.dy,
+      x: origin.toScreenX(topLeft.dx),
+      y: origin.toScreenY(topLeft.dy),
+      width: origin.toScreenSize(size.width),
+      height: origin.toScreenSize(size.height),
+    );
   }
 
   @override
@@ -533,6 +620,30 @@ class _StatusPill extends StatelessWidget {
           ],
         ),
       );
+}
+
+class _TileSample {
+  const _TileSample({
+    required this.id,
+    required this.left,
+    required this.top,
+    required this.right,
+    required this.bottom,
+    required this.x,
+    required this.y,
+    required this.width,
+    required this.height,
+  });
+
+  final String id;
+  final double left;
+  final double top;
+  final double right;
+  final double bottom;
+  final int x;
+  final int y;
+  final int width;
+  final int height;
 }
 
 class _VdiVideoTile extends StatelessWidget {

@@ -6,24 +6,42 @@ import 'package:logging/logging.dart';
 import 'json_rpc.dart';
 import 'media_engine_client.dart';
 import 'media_engine_state.dart';
+import 'visible_region.dart';
 
 final _log = Logger('VdiMediaEngine');
 
-/// Screen rectangle sent to `set_geometry`. Values are root-window pixels.
+/// Screen rectangle sent to `set_geometry`, plus the pieces of that widget
+/// that are actually showing.
+///
+/// [x], [y], [width], and [height] are root-window pixels. [regions] use that
+/// same pixel unit, origin at the widget's top-left, exclusive of right and
+/// bottom.
 class TileRect {
-  const TileRect({required this.x, required this.y, required this.width, required this.height});
+  const TileRect({
+    required this.x,
+    required this.y,
+    required this.width,
+    required this.height,
+    required this.regions,
+  });
 
   final int x;
   final int y;
   final int width;
   final int height;
+  final List<RegionRect> regions;
 
   @override
   bool operator ==(Object other) =>
-      other is TileRect && other.x == x && other.y == y && other.width == width && other.height == height;
+      other is TileRect &&
+      other.x == x &&
+      other.y == y &&
+      other.width == width &&
+      other.height == height &&
+      listEquals(other.regions, regions);
 
   @override
-  int get hashCode => Object.hash(x, y, width, height);
+  int get hashCode => Object.hash(x, y, width, height, Object.hashAll(regions));
 }
 
 /// Room state mirrored from the media engine, plus tile placement.
@@ -188,7 +206,8 @@ class MediaEngineController extends ChangeNotifier {
     });
   }
 
-  /// Queues a `set_geometry` for [windowId] when the tile has moved or resized.
+  /// Queues a `set_geometry` for [windowId] when the tile or its visible
+  /// regions have changed.
   void reportGeometry(String windowId, TileRect rect) {
     if (_shutDown || _quitStarted || _overlayHidden == true || rect.width < 2 || rect.height < 2) return;
     if (_lastGeometry[windowId] == rect) return;
@@ -499,10 +518,11 @@ class MediaEngineController extends ChangeNotifier {
             y: rect.y,
             width: rect.width,
             height: rect.height,
+            regions: rect.regions,
           );
           _lastGeometry[entry.key] = rect;
           _log.fine(
-            'set_geometry ${entry.key} -> ${rect.x},${rect.y} ${rect.width}x${rect.height}',
+            'set_geometry ${entry.key} -> ${rect.x},${rect.y} ${rect.width}x${rect.height} regions=${rect.regions.length}',
           );
         } on JsonRpcException catch (error) {
           if (error.code == -32602) {

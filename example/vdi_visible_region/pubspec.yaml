@@ -1,0 +1,18 @@
+name: vdi_visible_region
+description: Win32 visible-region query for VDI video tiles in the LiveKit example.
+publish_to: 'none'
+version: 0.0.1
+
+environment:
+  sdk: ">=3.10.0 <4.0.0"
+  flutter: ">=3.38.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      windows:
+        pluginClass: VdiVisibleRegionPluginCApi

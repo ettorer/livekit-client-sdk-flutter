@@ -36,6 +36,8 @@ class VdiSession {
   var _exitStarted = false;
   var _overlayHidden = false;
 
+  bool get overlayHidden => _overlayHidden;
+
   void attach(MediaEngineController controller, String engineUrl) {
     _controller = controller;
     _engineUrl = engineUrl;
